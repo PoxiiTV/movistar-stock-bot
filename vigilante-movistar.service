@@ -1,0 +1,15 @@
+[Unit]
+Description=Vigilante de stock Movistar (iPhone 18 Pro Max Burdeos, Swap)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vigilante-movistar
+EnvironmentFile=/opt/vigilante-movistar/.env
+ExecStart=/usr/bin/node /opt/vigilante-movistar/index.js
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

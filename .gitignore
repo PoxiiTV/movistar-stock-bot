@@ -1,0 +1,11 @@
+# Credenciales y configuración local
+.env
+
+# Estado en ejecución
+state.json
+
+# Salida de deploy
+deploy-hosting/
+
+# Node
+node_modules/
