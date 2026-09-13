@@ -160,10 +160,23 @@ const info = {
   ultimaComprobacion: null,
   proxima: null,
   lecturas: {},
+  fallosSeguidos: 0,
+  avisadoDeCaida: false,
   historial: [], // Solo los últimos HISTORIAL intentos; lo viejo no sirve para nada.
 };
 
 export const HISTORIAL = 10;
+
+// Tras este numero de fallos seguidos se avisa de que el vigilante esta ciego.
+// A 3 min por ronda son unos 15 minutos de silencio antes de dar la voz.
+export const FALLOS_PARA_AVISAR = 5;
+
+// El silencio del bot es identico a "no hay stock", asi que una caida prolongada
+// tiene que avisarse igual que el stock: si no, esperarias un aviso que no llegara.
+export function decidirAvisoDeCaida({ hayFallo, fallosSeguidos, avisado, umbral = FALLOS_PARA_AVISAR }) {
+  if (hayFallo) return !avisado && fallosSeguidos >= umbral ? 'caida' : null;
+  return avisado ? 'recuperado' : null;
+}
 
 export function anotar(resumen) {
   info.historial.push({ cuando: new Date(), resumen });
@@ -228,6 +241,7 @@ export function informe() {
     }
   }
 
+  if (info.fallosSeguidos > 0) lineas.push('', `⚠️ ${info.fallosSeguidos} fallo(s) seguidos sin poder leer la web`);
   if (info.ultimoError) lineas.push('', `⚠️ Último error: ${escapar(info.ultimoError)}`);
   for (const objetivo of ajustes.objetivos) {
     lineas.push('', `👉 <a href="${escapar(objetivo.url)}">${escapar(objetivo.nombre)}</a>`);
@@ -246,12 +260,14 @@ const TECLADO_FIJO = {
   is_persistent: true,
 };
 
-async function api(metodo, cuerpo) {
+// getUpdates deja la conexion abierta esperando mensajes, asi que necesita mas margen
+// que el resto: con el limite corto se abortaba sola cada 30 s y dejaba huecos sin escuchar.
+async function api(metodo, cuerpo, limiteMs = 30_000) {
   const res = await fetch(`https://api.telegram.org/bot${TOKEN}/${metodo}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(cuerpo),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(limiteMs),
   });
   const data = await res.json();
   if (!data.ok) throw new Error(`Telegram ${metodo}: ${data.description}`);
@@ -581,14 +597,48 @@ async function ejecutarCiclo({ programada = true } = {}) {
   info.comprobaciones += 1;
   info.ultimaComprobacion = new Date();
   if (programada) info.proxima = new Date(Date.now() + ajustes.minutos * 60_000);
+  let fallo = null;
   try {
     await comprobar();
     info.ultimoError = null;
+    info.fallosSeguidos = 0;
   } catch (err) {
+    fallo = err;
     info.errores += 1;
+    info.fallosSeguidos += 1;
     info.ultimoError = `${err.message} (${hora(new Date())})`;
     anotar(`error: ${err.message}`);
     log('Error en la comprobación:', err.message, '— se reintentará en el siguiente ciclo.');
+  }
+
+  const decision = decidirAvisoDeCaida({
+    hayFallo: Boolean(fallo),
+    fallosSeguidos: info.fallosSeguidos,
+    avisado: info.avisadoDeCaida,
+  });
+  if (!decision) return;
+
+  try {
+    if (decision === 'caida') {
+      await telegram(
+        [
+          '⚠️ <b>El vigilante no puede leer la web</b>',
+          `${info.fallosSeguidos} intentos fallidos seguidos.`,
+          `Último error: <code>${escapar(fallo.message)}</code>`,
+          '',
+          'Sigue intentándolo. Te aviso en cuanto vuelva.',
+        ].join('\n')
+      );
+      info.avisadoDeCaida = true;
+      log('📨 Aviso de caída enviado.');
+    } else {
+      await telegram('✅ <b>El vigilante vuelve a leer la web</b>\nLa vigilancia continúa con normalidad.');
+      info.avisadoDeCaida = false;
+      log('📨 Aviso de recuperación enviado.');
+    }
+  } catch (err) {
+    // Si el que falla es Telegram, no se marca como avisado: se reintenta en la siguiente ronda.
+    log('No se pudo enviar el aviso de estado:', err.message);
   }
 }
 
@@ -614,7 +664,8 @@ async function escucharTelegram() {
   let offset = 0;
   for (;;) {
     try {
-      const actualizaciones = await api('getUpdates', { timeout: 50, offset });
+      const ESCUCHA_S = 50;
+      const actualizaciones = await api('getUpdates', { timeout: ESCUCHA_S, offset }, (ESCUCHA_S + 20) * 1000);
       for (const update of actualizaciones) {
         offset = update.update_id + 1;
 

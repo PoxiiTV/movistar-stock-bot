@@ -11,7 +11,7 @@ process.env.TARGETS = [
   `iPhone 18 Pro Max 512 GB Burdeos | iphone-18-pro-max-fusion,burdeos,512GB | ${URL_512}`,
 ].join(' ; ');
 
-const { extraerStock, leerObjetivos, informe, anotar, HISTORIAL, extraerVariantes, urlDeVariante } = await import('./index.js');
+const { extraerStock, leerObjetivos, informe, anotar, HISTORIAL, extraerVariantes, urlDeVariante, decidirAvisoDeCaida, FALLOS_PARA_AVISAR } = await import('./index.js');
 
 // --- parseo de stock ---
 const html = `
@@ -72,6 +72,19 @@ assert.equal(
   'https://www.movistar.es/moviles/apple-iphone-18-pro-max-256gb-burdeos/'
 );
 assert.equal(urlDeVariante(catalogo, { modelo: 'iphone-99', color: 'rosa', capacidad: '1GB' }, 'respaldo'), 'respaldo');
+
+// --- aviso de caida ---
+// El silencio del bot es identico a "no hay stock". Si esto se rompe, una caida
+// de horas pasaria desapercibida mientras esperas un aviso que no va a llegar.
+const caida = (hayFallo, fallosSeguidos, avisado) =>
+  decidirAvisoDeCaida({ hayFallo, fallosSeguidos, avisado });
+
+assert.equal(caida(true, 1, false), null, 'un fallo suelto no molesta');
+assert.equal(caida(true, FALLOS_PARA_AVISAR - 1, false), null, 'aun por debajo del umbral');
+assert.equal(caida(true, FALLOS_PARA_AVISAR, false), 'caida', 'al llegar al umbral hay que avisar');
+assert.equal(caida(true, FALLOS_PARA_AVISAR + 9, true), null, 'avisado una vez, no se repite');
+assert.equal(caida(false, 0, true), 'recuperado', 'tras avisar, la vuelta tambien se cuenta');
+assert.equal(caida(false, 0, false), null, 'sin caida previa no hay nada que anunciar');
 
 // --- escapado de HTML ---
 // Telegram rechaza el mensaje entero si el HTML esta mal formado; un nombre con & o <

@@ -55,6 +55,7 @@ Ese `alias` codifica **SKU, modelo, color, capacidad y modalidad**. El bot desca
 - 🎲 **Margen aleatorio.** Hasta un 20% del intervalo, para no golpear la web siempre en el mismo segundo.
 - 🚨 **Nunca falla en silencio.** Si Movistar cambia la web y el bot deja de encontrar la variante, te lo dice por Telegram en vez de quedarse callado fingiendo que todo va bien.
 - 🗒️ **Log limpio.** Al `journalctl` solo van los cambios. Si nada se mueve, no escribe nada.
+- 📡 **Avisa si se queda ciego.** Tras 5 fallos seguidos (~15 min) te manda un ⚠️, y otro ✅ cuando vuelve. El silencio del bot es idéntico a "no hay stock", así que una caída tiene que avisarse igual que el stock.
 
 ---
 
@@ -263,6 +264,7 @@ The `alias` encodes SKU, model, colour, capacity and plan. The bot fetches the p
 - 🎯 **Independent targets** — each variant keeps its own state.
 - 🚨 **Never fails silently** — if the site changes and a variant can't be found, it tells you on Telegram.
 - 🗒️ **Quiet logs** — only changes reach `journalctl`.
+- 📡 **Tells you when it goes blind** — after 5 consecutive failures (~15 min) it sends a ⚠️, and a ✅ when it recovers. A silent bot looks exactly like "no stock", so an outage has to be announced too.
 
 ## 💬 Status on demand
 
