@@ -1,25 +1,26 @@
 // Vigila el stock de uno o varios dispositivos en movistar.es y avisa por Telegram.
-// Sin dependencias: fetch es nativo de Node >= 18.
+// Se maneja desde el propio chat con botones. Sin dependencias: fetch es nativo de Node >= 18.
 
-import { readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { hostname } from 'node:os';
 
-const MODALIDAD = process.env.PRODUCT_VARIANT || '';
-const MINUTOS = Number(process.env.CHECK_MINUTES || 30);
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const CHAT = process.env.TELEGRAM_CHAT_ID;
+const FUENTE = process.env.SOURCE_URL || null;
 const ESTADO = new URL('./state.json', import.meta.url);
+const AJUSTES = new URL('./config.json', import.meta.url);
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 const log = (...args) => console.log(new Date().toLocaleString('es-ES'), '·', ...args);
+const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+const hora = (d) => d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 
 // Telegram rechaza el mensaje ENTERO si el HTML está mal formado, así que cualquier
 // texto que venga de la configuración se escapa antes de meterlo en el mensaje.
 const escapar = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const espera = (ms) => new Promise((r) => setTimeout(r, ms));
-const hora = (d) => d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 
 function duracion(ms) {
   const min = Math.floor(ms / 60000);
@@ -29,8 +30,9 @@ function duracion(ms) {
   return `${h} h ${min % 60} min`;
 }
 
-// TARGETS: objetivos separados por ";", cada uno "Nombre | término,término | url".
-// Basta con que uno tenga stock para recibir el aviso; cada objetivo avisa por su cuenta.
+// ─────────────────────────────  Objetivos y ajustes  ─────────────────────────────
+
+// Formato de TARGETS: objetivos separados por ";", cada uno "Nombre | término,término | url".
 export function leerObjetivos(texto) {
   return (texto || '')
     .split(';')
@@ -40,14 +42,44 @@ export function leerObjetivos(texto) {
       const [nombre, terminos, url] = linea.split('|').map((p) => p.trim());
       if (!nombre || !terminos || !url) throw new Error(`Objetivo mal escrito en TARGETS: "${linea}"`);
       const lista = terminos.split(',').map((t) => t.trim()).filter(Boolean);
-      return { nombre, terminos: lista, url, clave: lista.join('+') };
+      const modalidad = process.env.PRODUCT_VARIANT || (lista.some((t) => t.endsWith('-fusion')) ? 'Movistar Swap' : '');
+      return { nombre, terminos: lista, url, modalidad, clave: lista.join('+') };
     });
 }
 
-const OBJETIVOS = leerObjetivos(process.env.TARGETS);
-// Página única de la que leer el stock de todos los objetivos. Si se deja vacía,
-// cada objetivo se lee de su propia url.
-const FUENTE = process.env.SOURCE_URL || null;
+// Los ajustes viven en config.json para poder cambiarlos desde el chat.
+// La primera vez se siembran con lo que haya en el .env.
+function cargarAjustes() {
+  if (existsSync(AJUSTES)) {
+    try {
+      const guardados = JSON.parse(readFileSync(AJUSTES, 'utf8'));
+      if (Array.isArray(guardados.objetivos)) return guardados;
+    } catch (err) {
+      log('config.json ilegible, se reconstruye desde el .env:', err.message);
+    }
+  }
+  return {
+    objetivos: leerObjetivos(process.env.TARGETS),
+    minutos: Number(process.env.CHECK_MINUTES || 30),
+    pausado: false,
+  };
+}
+
+const ajustes = cargarAjustes();
+
+function guardarAjustes() {
+  escribirAtomico(AJUSTES, ajustes);
+}
+
+// ─────────────────────────────  Estado persistente  ─────────────────────────────
+
+function escribirAtomico(destino, datos) {
+  // Se escribe aparte y se renombra: un corte de luz a media escritura dejaría un
+  // archivo truncado, y al no poder leerlo el bot repetiría avisos ya dados.
+  const temporal = new URL(`${destino.pathname.split('/').pop()}.tmp`, destino);
+  writeFileSync(temporal, JSON.stringify(datos, null, 2));
+  renameSync(temporal, destino);
+}
 
 function leerEstado() {
   try {
@@ -57,13 +89,9 @@ function leerEstado() {
   }
 }
 
-function guardarEstado(estado) {
-  // Se escribe aparte y se renombra: un corte de luz a media escritura dejaria
-  // un state.json truncado, y al no poder leerlo el bot repetiria avisos ya dados.
-  const temporal = new URL('./state.json.tmp', import.meta.url);
-  writeFileSync(temporal, JSON.stringify(estado, null, 2));
-  renameSync(temporal, ESTADO);
-}
+const guardarEstado = (estado) => escribirAtomico(ESTADO, estado);
+
+// ─────────────────────────────  Lectura del catálogo  ─────────────────────────────
 
 // El HTML del producto lleva incrustado un JSON con "stock":N,"alias":"sku_modelo_color_capacidad_modalidad".
 // Devuelve las unidades de las variantes cuyo alias contiene todos los términos buscados.
@@ -78,7 +106,52 @@ export function extraerStock(html, terminos) {
   return encontrados;
 }
 
-// Datos en memoria para el informe de estado por Telegram.
+// Desmonta el alias en modelo, color y capacidad para poder construir los menús
+// con las combinaciones que existen de verdad, en vez de con una lista inventada.
+export function extraerVariantes(html) {
+  const variantes = new Map();
+  const re = /"stock":(\d+),"alias":"\d+_([a-z0-9-]+)_([a-z0-9-]+)_(\d+GB)_([a-z_]+)"/g;
+  for (const [, stock, modelo, color, capacidad, resto] of html.matchAll(re)) {
+    const clave = `${modelo}|${color}|${capacidad}`;
+    const previo = variantes.get(clave);
+    variantes.set(clave, {
+      modelo,
+      color,
+      capacidad,
+      swap: modelo.endsWith('-fusion'),
+      unidades: Math.max(previo?.unidades ?? 0, Number(stock)),
+      resto,
+    });
+  }
+  return [...variantes.values()];
+}
+
+// El color del alias no coincide con el de la url (azul -> azulglacial), así que el
+// enlace de compra se busca entre las urls que la propia página ya trae.
+export function urlDeVariante(html, variante, respaldo) {
+  const base = variante.modelo.replace(/-fusion$/, '');
+  const slugs = [...new Set([...html.matchAll(/\/moviles\/(apple-iphone-[a-z0-9-]+)\//g)].map((m) => m[1]))];
+  const prefijo = `apple-${base}-${variante.capacidad.toLowerCase()}-`;
+  const colorPlano = variante.color.replace(/-/g, '');
+  const encontrado = slugs.find((s) => s.startsWith(prefijo) && s.slice(prefijo.length).startsWith(colorPlano));
+  return encontrado ? `https://www.movistar.es/moviles/${encontrado}/` : respaldo;
+}
+
+const bonito = (modelo) =>
+  modelo
+    .replace(/-fusion$/, '')
+    .split('-')
+    .map((p) => (p === 'iphone' ? 'iPhone' : /^\d/.test(p) ? p : p.charAt(0).toUpperCase() + p.slice(1)))
+    .join(' ');
+
+const colorBonito = (color) =>
+  color.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+
+const nombreDeVariante = (v) =>
+  `${bonito(v.modelo)} ${v.capacidad.replace('GB', ' GB')} ${colorBonito(v.color)}${v.swap ? '' : ' (compra)'}`;
+
+// ─────────────────────────────  Datos en memoria  ─────────────────────────────
+
 const arranque = Date.now();
 const info = {
   comprobaciones: 0,
@@ -97,13 +170,25 @@ export function anotar(resumen) {
   if (info.historial.length > HISTORIAL) info.historial.shift();
 }
 
+// Última página descargada, para que los menús no vuelvan a pedirla en cada toque.
+let cache = { html: null, cuando: 0 };
+
+async function catalogo() {
+  if (cache.html && Date.now() - cache.cuando < 5 * 60_000) return cache.html;
+  const html = await descargar(FUENTE ?? ajustes.objetivos[0]?.url);
+  cache = { html, cuando: Date.now() };
+  return html;
+}
+
+// ─────────────────────────────  Informe  ─────────────────────────────
+
 export function informe() {
   const estado = leerEstado();
-  const lineas = ['🟢 <b>Vigilante operativo</b>', '', `🏷 Modalidad: ${escapar(MODALIDAD)}`, ''];
+  const lineas = [ajustes.pausado ? '⏸️ <b>Vigilante en pausa</b>' : '🟢 <b>Vigilante operativo</b>', ''];
 
   if (info.ultimaComprobacion) {
     lineas.push('📦 <b>Última lectura</b>');
-    for (const objetivo of OBJETIVOS) {
+    for (const objetivo of ajustes.objetivos) {
       const lectura = info.lecturas[objetivo.clave];
       if (!lectura) {
         lineas.push(`   ⚠️ ${escapar(objetivo.nombre)} — sin datos`);
@@ -116,21 +201,21 @@ export function informe() {
     lineas.push(
       '',
       `🕐 Comprobado: ${hora(info.ultimaComprobacion)} (hace ${duracion(Date.now() - info.ultimaComprobacion)})`,
-      `⏭ Próxima: ~${hora(info.proxima)}`
+      ajustes.pausado ? '⏭ Próxima: en pausa' : `⏭ Próxima: ~${hora(info.proxima)}`
     );
   } else {
     lineas.push('📦 Estado: aún sin datos, primera comprobación en curso.');
   }
 
-  const avisados = OBJETIVOS.filter((o) => estado.objetivos?.[o.clave]?.hayStock).length;
+  const avisados = ajustes.objetivos.filter((o) => estado.objetivos?.[o.clave]?.hayStock).length;
   const aviso =
     avisados === 0
-      ? `armado para los ${OBJETIVOS.length} modelos`
+      ? `armado para ${ajustes.objetivos.length} modelo(s)`
       : `${avisados} ya avisado(s), se rearma al agotarse`;
 
   lineas.push(
     '',
-    `🔁 Cada ${MINUTOS} min · ${info.comprobaciones} comprobaciones · ${info.errores} errores`,
+    `🔁 Cada ${ajustes.minutos} min · ${info.comprobaciones} comprobaciones · ${info.errores} errores`,
     `🔔 Aviso: ${aviso}`,
     `⏱ En marcha desde ${hora(new Date(arranque))} (${duracion(Date.now() - arranque)})`,
     `🖥 Servidor: ${hostname()}`
@@ -144,29 +229,267 @@ export function informe() {
   }
 
   if (info.ultimoError) lineas.push('', `⚠️ Último error: ${escapar(info.ultimoError)}`);
-  for (const objetivo of OBJETIVOS) {
+  for (const objetivo of ajustes.objetivos) {
     lineas.push('', `👉 <a href="${escapar(objetivo.url)}">${escapar(objetivo.nombre)}</a>`);
   }
   return lineas.join('\n');
 }
 
-async function telegram(texto) {
-  const res = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
+// ─────────────────────────────  Telegram  ─────────────────────────────
+
+// Teclado fijo bajo la caja de texto: no se va con el scroll, siempre a un toque.
+// Telegram solo admite un reply_markup por mensaje, asi que este va en los informes
+// y el teclado inline (el que navega entre pantallas) va en el menu.
+const TECLADO_FIJO = {
+  keyboard: [[{ text: '⚙️ Ajustes' }, { text: '📊 Estado' }]],
+  resize_keyboard: true,
+  is_persistent: true,
+};
+
+async function api(metodo, cuerpo) {
+  const res = await fetch(`https://api.telegram.org/bot${TOKEN}/${metodo}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: process.env.TELEGRAM_CHAT_ID,
-      text: texto,
-      parse_mode: 'HTML',
-      disable_web_page_preview: false,
-    }),
+    body: JSON.stringify(cuerpo),
+    signal: AbortSignal.timeout(30_000),
   });
   const data = await res.json();
-  if (!data.ok) throw new Error(`Telegram: ${data.description}`);
+  if (!data.ok) throw new Error(`Telegram ${metodo}: ${data.description}`);
+  return data.result;
 }
 
+// conVista solo en el aviso de stock: ahi la miniatura del producto ayuda. En el informe
+// hay varios enlaces y Telegram elige uno al azar, que puede ser de otro color y confundir.
+const telegram = (texto, teclado, conVista = false) =>
+  api('sendMessage', {
+    chat_id: CHAT,
+    text: texto,
+    parse_mode: 'HTML',
+    disable_web_page_preview: !conVista,
+    reply_markup: teclado ? { inline_keyboard: teclado } : TECLADO_FIJO,
+  });
+
+// Al editar el mensaje en vez de mandar uno nuevo, el menú no llena el chat.
+async function editar(chatId, messageId, texto, teclado) {
+  try {
+    await api('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      text: texto,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      reply_markup: { inline_keyboard: teclado ?? [] },
+    });
+  } catch (err) {
+    // Telegram da error si el contenido es idéntico al que ya había; no es un fallo real.
+    if (!/message is not modified/i.test(err.message)) throw err;
+  }
+}
+
+// ─────────────────────────────  Pantallas del menú  ─────────────────────────────
+
+const boton = (text, callback_data) => ({ text, callback_data });
+
+
+function pantallaMenu() {
+  const texto = [
+    '⚙️ <b>Ajustes del vigilante</b>',
+    '',
+    `📋 ${ajustes.objetivos.length} modelo(s) vigilados`,
+    `⏱️ Comprobando cada ${ajustes.minutos} min`,
+    ajustes.pausado ? '⏸️ En pausa' : '🟢 En marcha',
+  ].join('\n');
+  const teclado = [
+    [boton('📋 Objetivos', 'objs'), boton('➕ Añadir', 'add')],
+    [boton('⏱️ Frecuencia', 'int'), boton(ajustes.pausado ? '▶️ Reanudar' : '⏸️ Pausar', 'pause')],
+    [boton('📊 Estado ahora', 'estado')],
+  ];
+  return { texto, teclado };
+}
+
+function pantallaObjetivos() {
+  if (ajustes.objetivos.length === 0) {
+    return {
+      texto: '📋 <b>Objetivos</b>\n\nNo hay ninguno. Añade uno para empezar a vigilar.',
+      teclado: [[boton('➕ Añadir', 'add')], [boton('⬅️ Volver', 'menu')]],
+    };
+  }
+  const texto = [
+    '📋 <b>Objetivos vigilados</b>',
+    '',
+    'Toca 🗑️ para dejar de vigilar uno.',
+  ].join('\n');
+  const teclado = ajustes.objetivos.map((o) => {
+    const lectura = info.lecturas[o.clave];
+    const marca = !lectura ? '⚠️' : lectura.unidades > 0 ? `✅ ${lectura.unidades}` : '❌';
+    return [boton(`${marca} ${o.nombre}`, 'nada'), boton('🗑️', `del:${o.clave}`)];
+  });
+  teclado.push([boton('➕ Añadir', 'add')], [boton('⬅️ Volver', 'menu')]);
+  return { texto, teclado };
+}
+
+// Las tres pantallas de alta salen del catálogo real: solo se ofrecen combinaciones
+// que existen, así que es imposible acabar vigilando un modelo fantasma.
+function pantallaAlta(variantes, modelo, color) {
+  const filas = (botones, porFila) => {
+    const salida = [];
+    for (let i = 0; i < botones.length; i += porFila) salida.push(botones.slice(i, i + porFila));
+    return salida;
+  };
+
+  if (!modelo) {
+    const modelos = [...new Set(variantes.map((v) => v.modelo))].sort((a, b) => b.localeCompare(a));
+    return {
+      texto: '➕ <b>Añadir objetivo</b>\n\n1 de 3 — elige el modelo:',
+      teclado: [
+        ...filas(modelos.map((m) => boton(`${bonito(m)}${m.endsWith('-fusion') ? ' · Swap' : ' · compra'}`, `add:${m}`)), 2),
+        [boton('⬅️ Volver', 'menu')],
+      ],
+    };
+  }
+
+  if (!color) {
+    const colores = [...new Set(variantes.filter((v) => v.modelo === modelo).map((v) => v.color))];
+    return {
+      texto: `➕ <b>${escapar(bonito(modelo))}</b>\n\n2 de 3 — elige el color:`,
+      teclado: [
+        ...filas(colores.map((c) => boton(colorBonito(c), `add:${modelo}:${c}`)), 2),
+        [boton('⬅️ Volver', 'add')],
+      ],
+    };
+  }
+
+  const capacidades = variantes.filter((v) => v.modelo === modelo && v.color === color);
+  return {
+    texto: `➕ <b>${escapar(bonito(modelo))} ${escapar(colorBonito(color))}</b>\n\n3 de 3 — elige la capacidad:`,
+    teclado: [
+      ...filas(
+        capacidades.map((v) =>
+          boton(
+            `${v.capacidad.replace('GB', ' GB')}${v.unidades > 0 ? ` · ✅ ${v.unidades}` : ' · ❌'}`,
+            `add:${modelo}:${color}:${v.capacidad}`
+          )
+        ),
+        2
+      ),
+      [boton('⬅️ Volver', `add:${modelo}`)],
+    ],
+  };
+}
+
+function pantallaFrecuencia() {
+  const opciones = [1, 3, 5, 10, 30, 60];
+  return {
+    texto: [
+      '⏱️ <b>Frecuencia de comprobación</b>',
+      '',
+      `Ahora: cada ${ajustes.minutos} min`,
+      '',
+      'Cada ronda baja ~1 MB. A 3 min son unos 480 MB al día.',
+    ].join('\n'),
+    teclado: [
+      opciones.map((m) => boton(`${m === ajustes.minutos ? '• ' : ''}${m} min`, `int:${m}`)),
+      [boton('⬅️ Volver', 'menu')],
+    ],
+  };
+}
+
+// ─────────────────────────────  Router de botones  ─────────────────────────────
+
+async function pulsacion(query) {
+  const datos = query.data ?? '';
+  const chatId = query.message?.chat?.id;
+  const messageId = query.message?.message_id;
+  let aviso = null;
+  let pantalla;
+
+  if (datos === 'nada') {
+    await api('answerCallbackQuery', { callback_query_id: query.id });
+    return;
+  }
+
+  if (datos === 'estado') {
+    await api('answerCallbackQuery', { callback_query_id: query.id, text: 'Consultando a Movistar…' });
+    await ciclo({ programada: false });
+    await telegram(informe());
+    return;
+  }
+
+  if (datos === 'menu') {
+    pantalla = pantallaMenu();
+  } else if (datos === 'objs') {
+    pantalla = pantallaObjetivos();
+  } else if (datos === 'int') {
+    pantalla = pantallaFrecuencia();
+  } else if (datos.startsWith('int:')) {
+    const minutos = Number(datos.slice(4));
+    if (Number.isFinite(minutos) && minutos >= 1) {
+      ajustes.minutos = minutos;
+      guardarAjustes();
+      reprogramar();
+      aviso = `Cada ${minutos} min`;
+    }
+    pantalla = pantallaFrecuencia();
+  } else if (datos === 'pause') {
+    ajustes.pausado = !ajustes.pausado;
+    guardarAjustes();
+    reprogramar();
+    aviso = ajustes.pausado ? 'En pausa' : 'Vigilando de nuevo';
+    pantalla = pantallaMenu();
+  } else if (datos.startsWith('del:')) {
+    const clave = datos.slice(4);
+    const fuera = ajustes.objetivos.find((o) => o.clave === clave);
+    ajustes.objetivos = ajustes.objetivos.filter((o) => o.clave !== clave);
+    delete info.lecturas[clave];
+    guardarAjustes();
+    aviso = fuera ? `Quitado: ${fuera.nombre}` : 'Ya no estaba';
+    pantalla = pantallaObjetivos();
+  } else if (datos === 'add' || datos.startsWith('add:')) {
+    const [, modelo, color, capacidad] = datos.split(':');
+    const html = await catalogo();
+    const variantes = extraerVariantes(html);
+
+    if (capacidad) {
+      const variante = variantes.find(
+        (v) => v.modelo === modelo && v.color === color && v.capacidad === capacidad
+      );
+      if (!variante) {
+        aviso = 'Esa combinación ya no existe';
+        pantalla = pantallaObjetivos();
+      } else {
+        const terminos = [variante.modelo, variante.color, variante.capacidad];
+        const clave = terminos.join('+');
+        if (ajustes.objetivos.some((o) => o.clave === clave)) {
+          aviso = 'Ya lo estabas vigilando';
+        } else {
+          ajustes.objetivos.push({
+            nombre: nombreDeVariante(variante),
+            terminos,
+            url: urlDeVariante(html, variante, FUENTE ?? ''),
+            modalidad: variante.swap ? 'Movistar Swap' : 'Compra directa',
+            clave,
+          });
+          guardarAjustes();
+          aviso = `Añadido: ${nombreDeVariante(variante)}`;
+          log(`➕ Objetivo añadido desde Telegram: ${clave}`);
+        }
+        pantalla = pantallaObjetivos();
+      }
+    } else {
+      pantalla = pantallaAlta(variantes, modelo, color);
+    }
+  } else {
+    pantalla = pantallaMenu();
+  }
+
+  await api('answerCallbackQuery', { callback_query_id: query.id, ...(aviso ? { text: aviso } : {}) });
+  if (pantalla && chatId && messageId) await editar(chatId, messageId, pantalla.texto, pantalla.teclado);
+}
+
+// ─────────────────────────────  Vigilancia  ─────────────────────────────
+
 async function descargar(url) {
-  // Sin limite de tiempo, una conexion colgada dejaria el vigilante congelado sin que se note.
+  // Sin límite de tiempo, una conexión colgada dejaría el vigilante congelado sin que se note.
   const res = await fetch(url, {
     headers: { 'user-agent': UA, 'accept-language': 'es-ES,es;q=0.9' },
     signal: AbortSignal.timeout(30_000),
@@ -179,14 +502,15 @@ async function comprobar() {
   // Cualquier ficha de Movistar lleva el catálogo entero en su JSON, así que con SOURCE_URL
   // basta una descarga para todos los objetivos; su url queda solo como enlace de compra.
   const paginas = new Map();
-  const fuentes = FUENTE ? [FUENTE] : [...new Set(OBJETIVOS.map((o) => o.url))];
+  const fuentes = FUENTE ? [FUENTE] : [...new Set(ajustes.objetivos.map((o) => o.url))];
   for (const url of fuentes) paginas.set(url, await descargar(url));
   const html = (objetivo) => paginas.get(FUENTE ?? objetivo.url);
+  cache = { html: paginas.get(fuentes[0]), cuando: Date.now() };
 
   const estado = leerEstado();
   estado.objetivos ??= {};
 
-  for (const objetivo of OBJETIVOS) {
+  for (const objetivo of ajustes.objetivos) {
     const previo = estado.objetivos[objetivo.clave] ?? { hayStock: false, avisadoSinCoincidencias: false };
     const variantes = extraerStock(html(objetivo), objetivo.terminos);
 
@@ -212,7 +536,9 @@ async function comprobar() {
 
     if (hayStock && !previo.hayStock) {
       await telegram(
-        `🚨 <b>¡YA HAY STOCK!</b>\n${escapar(objetivo.nombre)}\n${escapar(MODALIDAD)}\n${unidades} unidades disponibles\n\n👉 <a href="${escapar(objetivo.url)}">Enlace directo para comprarlo</a>`
+        `🚨 <b>¡YA HAY STOCK!</b>\n${escapar(objetivo.nombre)}\n${unidades} unidades disponibles\n\n👉 <a href="${escapar(objetivo.url)}">Enlace directo para comprarlo</a>`,
+        undefined,
+        true
       );
       log(`📨 Aviso enviado: ${objetivo.nombre}`);
     } else if (!hayStock && previo.hayStock) {
@@ -227,8 +553,12 @@ async function comprobar() {
   estado.ultimaComprobacion = new Date().toISOString();
   guardarEstado(estado);
 
-  const conStock = OBJETIVOS.filter((o) => info.lecturas[o.clave]?.unidades > 0);
-  anotar(conStock.length === 0 ? 'todo agotado' : conStock.map((o) => `${o.nombre}: ${info.lecturas[o.clave].unidades}`).join(', '));
+  const conStock = ajustes.objetivos.filter((o) => info.lecturas[o.clave]?.unidades > 0);
+  anotar(
+    conStock.length === 0
+      ? 'todo agotado'
+      : conStock.map((o) => `${o.nombre}: ${info.lecturas[o.clave].unidades}`).join(', ')
+  );
 }
 
 // Candado: la ronda automática y una consulta tuya por Telegram pueden coincidir.
@@ -246,9 +576,11 @@ function ciclo(opciones) {
 // programada = false cuando la comprobación la pides tú por Telegram;
 // esas no mueven la hora de la siguiente ronda automática.
 async function ejecutarCiclo({ programada = true } = {}) {
+  if (programada && ajustes.pausado) return;
+  if (ajustes.objetivos.length === 0) return;
   info.comprobaciones += 1;
   info.ultimaComprobacion = new Date();
-  if (programada) info.proxima = new Date(Date.now() + MINUTOS * 60_000);
+  if (programada) info.proxima = new Date(Date.now() + ajustes.minutos * 60_000);
   try {
     await comprobar();
     info.ultimoError = null;
@@ -260,29 +592,54 @@ async function ejecutarCiclo({ programada = true } = {}) {
   }
 }
 
-// Escucha mensajes: cualquier texto que le mandes devuelve el informe de estado.
+let temporizador = null;
+
+function reprogramar() {
+  if (temporizador) clearInterval(temporizador);
+  temporizador = null;
+  if (ajustes.pausado) {
+    log('Vigilancia en pausa.');
+    return;
+  }
+  // Margen aleatorio (como mucho un 20% del intervalo) para no golpear la web siempre igual.
+  const margen = Math.min(180_000, ajustes.minutos * 60_000 * 0.2);
+  temporizador = setInterval(ciclo, ajustes.minutos * 60_000 + Math.random() * margen);
+  info.proxima = new Date(Date.now() + ajustes.minutos * 60_000);
+  log(`Comprobando cada ${ajustes.minutos} min.`);
+}
+
+// ─────────────────────────────  Escucha de Telegram  ─────────────────────────────
+
 async function escucharTelegram() {
   let offset = 0;
   for (;;) {
     try {
-      const res = await fetch(`https://api.telegram.org/bot${TOKEN}/getUpdates?timeout=50&offset=${offset}`, {
-        signal: AbortSignal.timeout(70_000),
-      });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.description);
-      for (const update of data.result) {
+      const actualizaciones = await api('getUpdates', { timeout: 50, offset });
+      for (const update of actualizaciones) {
         offset = update.update_id + 1;
+
+        if (update.callback_query) {
+          // Solo obedece al chat configurado; a cualquier otro lo ignora.
+          if (String(update.callback_query.message?.chat?.id) !== String(CHAT)) continue;
+          await pulsacion(update.callback_query);
+          continue;
+        }
+
         const mensaje = update.message ?? update.edited_message;
-        // Solo contesta al chat configurado; a cualquier otro lo ignora.
-        if (!mensaje?.chat || String(mensaje.chat.id) !== String(process.env.TELEGRAM_CHAT_ID)) continue;
+        if (!mensaje?.chat || String(mensaje.chat.id) !== String(CHAT)) continue;
+        const texto = (mensaje.text ?? '').trim();
+
+        // "⚙️ Ajustes" del teclado fijo, /ajustes o /start abren el menú.
+        if (texto.startsWith('⚙️') || /^\/(start|ajustes|menu)/i.test(texto)) {
+          const pantalla = pantallaMenu();
+          await telegram(pantalla.texto, pantalla.teclado);
+          continue;
+        }
+
         log('Consulta de estado recibida.');
         // "Escribiendo..." mientras se consulta a Movistar, para que no parezca colgado.
-        fetch(`https://api.telegram.org/bot${TOKEN}/sendChatAction`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ chat_id: mensaje.chat.id, action: 'typing' }),
-        }).catch(() => {});
-        // Se consulta el stock en el momento, salvo que se acabe de mirar (evita repetir si escribes varias veces seguidas).
+        api('sendChatAction', { chat_id: mensaje.chat.id, action: 'typing' }).catch(() => {});
+        // Se consulta el stock en el momento, salvo que se acabe de mirar.
         if (!info.ultimaComprobacion || Date.now() - info.ultimaComprobacion > 20_000) {
           await ciclo({ programada: false });
         }
@@ -295,26 +652,31 @@ async function escucharTelegram() {
   }
 }
 
+// ─────────────────────────────  Arranque  ─────────────────────────────
+
 // Solo arranca el vigilante al ejecutar este archivo; al importarlo (test.js) no hace nada.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (!TOKEN || !process.env.TELEGRAM_CHAT_ID) {
+  if (!TOKEN || !CHAT) {
     console.error('Falta TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID en el archivo .env');
     process.exit(1);
   }
-  if (OBJETIVOS.length === 0) {
-    console.error('No hay ningún objetivo definido en TARGETS (archivo .env)');
-    process.exit(1);
-  }
-  // Un CHECK_MINUTES mal escrito daría NaN, y setInterval con NaN dispara sin parar:
+  // Un valor mal escrito daría NaN, y setInterval con NaN dispara sin parar:
   // machacaría la web de Movistar hasta que te bloqueen la IP.
-  if (!Number.isFinite(MINUTOS) || MINUTOS < 1) {
-    console.error(`CHECK_MINUTES debe ser un número de minutos mayor o igual a 1 (recibido: "${process.env.CHECK_MINUTES}")`);
+  if (!Number.isFinite(ajustes.minutos) || ajustes.minutos < 1) {
+    console.error(`La frecuencia debe ser un número de minutos mayor o igual a 1 (recibido: "${ajustes.minutos}")`);
     process.exit(1);
   }
-  log(`Vigilando cada ${MINUTOS} min: ${OBJETIVOS.map((o) => o.nombre).join(' | ')}`);
+  if (!existsSync(AJUSTES)) guardarAjustes();
+
+  api('setMyCommands', {
+    commands: [
+      { command: 'estado', description: 'Consultar el stock ahora mismo' },
+      { command: 'ajustes', description: 'Abrir el menú de ajustes' },
+    ],
+  }).catch((err) => log('No se pudieron registrar los comandos:', err.message));
+
+  log(`Vigilando: ${ajustes.objetivos.map((o) => o.nombre).join(' | ') || '(sin objetivos)'}`);
   await ciclo();
-  // Margen aleatorio (como mucho un 20% del intervalo) para no golpear la web siempre en el mismo instante.
-  const margen = Math.min(180_000, MINUTOS * 60_000 * 0.2);
-  setInterval(ciclo, MINUTOS * 60_000 + Math.random() * margen);
+  reprogramar();
   escucharTelegram();
 }

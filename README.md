@@ -58,14 +58,49 @@ Ese `alias` codifica **SKU, modelo, color, capacidad y modalidad**. El bot desca
 
 ---
 
+## 🎛️ Manejarlo desde el chat
+
+Todo se controla desde Telegram, sin SSH y sin tocar archivos. Debajo de la caja de texto hay un **teclado fijo** que no se va con el scroll:
+
+```
+   ⚙️ Ajustes    │    📊 Estado
+```
+
+Y el menú de ajustes:
+
+```
+⚙️ Ajustes del vigilante
+
+  📋 4 modelo(s) vigilados
+  ⏱️ Comprobando cada 3 min
+  🟢 En marcha
+
+  📋 Objetivos        ➕ Añadir
+  ⏱️ Frecuencia       ⏸️ Pausar
+       📊 Estado ahora
+```
+
+| Pantalla | Qué hace |
+|---|---|
+| **📋 Objetivos** | Lista con el stock de cada uno y una 🗑️ para dejar de vigilarlo |
+| **➕ Añadir** | Asistente de 3 toques: modelo → color → capacidad |
+| **⏱️ Frecuencia** | 1, 3, 5, 10, 30 o 60 min. Se reprograma en caliente |
+| **⏸️ Pausar** | Deja de comprobar sin parar el servicio |
+
+El asistente de alta **lee el catálogo real** y solo ofrece combinaciones que existen, con su stock actual al lado (`512 GB · ✅ 7`). Así es imposible acabar vigilando un modelo que no existe. También resuelve solo el enlace de compra correcto: el alias interno dice `azul` pero la web usa `azulglacial`.
+
+El menú se edita sobre sí mismo al navegar, así que no llena el chat de menús viejos.
+
+También hay comandos en el botón **/**: `/estado` y `/ajustes`.
+
+Los ajustes viven en `config.json`, que se siembra desde el `.env` la primera vez. A partir de ahí el `.env` solo guarda el token, el chat y la página fuente.
+
 ## 💬 Consultar el estado
 
 Escríbele **cualquier cosa** al bot (un "hola", un punto, un emoji) y consulta el stock **en ese momento** — no te da una lectura guardada — y responde:
 
 ```
 🟢 Vigilante operativo
-
-🏷 Modalidad: Movistar Swap
 
 📦 Última lectura
    ❌ iPhone 18 Pro Max 256 GB Burdeos — agotado
@@ -77,7 +112,7 @@ Escríbele **cualquier cosa** al bot (un "hola", un punto, un emoji) y consulta 
 ⏭ Próxima: ~14:25
 
 🔁 Cada 3 min · 284 comprobaciones · 0 errores
-🔔 Aviso: armado para los 4 modelos
+🔔 Aviso: armado para 4 modelo(s)
 ⏱ En marcha desde 11:39 (2 h 43 min)
 🖥 Servidor: minipc
 
@@ -136,9 +171,11 @@ Lo instala en `/opt/vigilante-movistar/` como servicio systemd: arranca solo al 
 
 ---
 
-## 🎛️ Vigilar otro producto
+## 🔧 Vigilar otro producto
 
-Edita `TARGETS`. Cada objetivo es `Nombre | términos | url` y se separan con `;`. Los términos deben aparecer **todos** en el alias interno de la variante:
+Lo normal es hacerlo desde **➕ Añadir** en el chat. Esta sección es solo para el `TARGETS` del `.env`, que siembra `config.json` la primera vez.
+
+Cada objetivo es `Nombre | términos | url` y se separan con `;`. Los términos deben aparecer **todos** en el alias interno de la variante:
 
 | Parte | Ejemplos |
 |---|---|
@@ -174,7 +211,8 @@ systemctl restart vigilante-movistar     # tras editar el .env
 | `index.js` | El vigilante entero |
 | `.env` | Token, chat, objetivos y frecuencia *(no incluido en el repo)* |
 | `chat-id.js` | Averigua tu chat de Telegram |
-| `test.js` | Comprueba parseo, objetivos e informe |
+| `config.json` | Objetivos y ajustes editables desde el chat *(no incluido en el repo)* |
+| `test.js` | Comprueba parseo, objetivos, enlaces e informe |
 | `install-linux.sh` | Instala el servicio systemd |
 | `vigilante-movistar.service` | Unidad de systemd |
 | `start.bat` · `chat-id.bat` | Lanzadores para Windows |
@@ -231,6 +269,14 @@ The `alias` encodes SKU, model, colour, capacity and plan. The bot fetches the p
 Send the bot **any message** and it checks stock **right then** (not a cached reading), replying with: running state, every target's stock, when it checked and when the next round is due, counters, whether the alert is armed, uptime, host, and the **last 10 attempts**.
 
 It only answers the configured `TELEGRAM_CHAT_ID`; anyone else is ignored. A 20-second debounce prevents hammering the site, and manual checks never shift the automatic schedule.
+
+## 🎛️ Controlling it from the chat
+
+Everything is managed from Telegram — no SSH, no file editing. A **persistent keyboard** sits under the text box (`⚙️ Ajustes` · `📊 Estado`), and the settings menu covers targets, adding new ones, frequency and pausing.
+
+The add wizard **reads the live catalogue** and only offers combinations that actually exist, with their current stock next to each option, and resolves the correct buy link on its own (the internal alias says `azul` while the site uses `azulglacial`). The menu edits itself in place instead of filling the chat.
+
+Settings live in `config.json`, seeded from `.env` on first run; after that `.env` only holds the token, the chat id and the source page.
 
 ## 🚀 Setup
 

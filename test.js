@@ -11,7 +11,7 @@ process.env.TARGETS = [
   `iPhone 18 Pro Max 512 GB Burdeos | iphone-18-pro-max-fusion,burdeos,512GB | ${URL_512}`,
 ].join(' ; ');
 
-const { extraerStock, leerObjetivos, informe, anotar, HISTORIAL } = await import('./index.js');
+const { extraerStock, leerObjetivos, informe, anotar, HISTORIAL, extraerVariantes, urlDeVariante } = await import('./index.js');
 
 // --- parseo de stock ---
 const html = `
@@ -45,6 +45,33 @@ const conHistorial = informe();
 assert.match(conHistorial, new RegExp(`Ultimos ${HISTORIAL} intentos`.replace('Ultimos', 'Últimos')));
 assert.match(conHistorial, /intento 15/, 'debe conservar el mas reciente');
 assert.doesNotMatch(conHistorial, /intento 5 /, 'debe descartar los viejos');
+
+// --- catalogo: los menus se construyen con combinaciones que existen de verdad ---
+const catalogo = `
+  "stock":0,"alias":"6732_iphone-18-pro-max-fusion_burdeos_256GB_rent_particulares"
+  "stock":3,"alias":"6733_iphone-18-pro-max-fusion_azul_256GB_rent_particulares"
+  "stock":8,"alias":"6700_iphone-18-pro-max_burdeos_256GB_particulares"
+  <a href="/moviles/apple-iphone-18-pro-max-256gb-burdeos/">x</a>
+  <a href="/moviles/apple-iphone-18-pro-max-256gb-azulglacial/">x</a>
+`;
+const variantes = extraerVariantes(catalogo);
+assert.equal(variantes.length, 3);
+const azul = variantes.find((v) => v.color === 'azul');
+assert.equal(azul.unidades, 3);
+assert.equal(azul.swap, true);
+assert.equal(variantes.find((v) => !v.swap).modelo, 'iphone-18-pro-max');
+
+// El color del alias no es el de la url: azul -> azulglacial. Si esto se rompe,
+// el aviso de stock llevaria un enlace equivocado justo cuando mas prisa hay.
+assert.equal(
+  urlDeVariante(catalogo, azul, 'respaldo'),
+  'https://www.movistar.es/moviles/apple-iphone-18-pro-max-256gb-azulglacial/'
+);
+assert.equal(
+  urlDeVariante(catalogo, variantes.find((v) => v.color === 'burdeos' && v.swap), 'respaldo'),
+  'https://www.movistar.es/moviles/apple-iphone-18-pro-max-256gb-burdeos/'
+);
+assert.equal(urlDeVariante(catalogo, { modelo: 'iphone-99', color: 'rosa', capacidad: '1GB' }, 'respaldo'), 'respaldo');
 
 // --- escapado de HTML ---
 // Telegram rechaza el mensaje entero si el HTML esta mal formado; un nombre con & o <

@@ -4,6 +4,8 @@
 # Estado en ejecución
 state.json
 state.json.tmp
+config.json
+config.json.tmp
 
 # Salida de deploy
 deploy-hosting/
