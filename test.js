@@ -46,6 +46,15 @@ assert.match(conHistorial, new RegExp(`Ultimos ${HISTORIAL} intentos`.replace('U
 assert.match(conHistorial, /intento 15/, 'debe conservar el mas reciente');
 assert.doesNotMatch(conHistorial, /intento 5 /, 'debe descartar los viejos');
 
+// --- escapado de HTML ---
+// Telegram rechaza el mensaje entero si el HTML esta mal formado; un nombre con & o <
+// dejaria al bot sin poder avisar justo el dia que hay stock.
+anotar('fallo: se esperaba <b> y llego &');
+const raro = informe();
+assert.doesNotMatch(raro, /&(?!amp;|lt;|gt;)/, 'todo & debe ir escapado');
+assert.equal((raro.match(/<b>/g) || []).length, (raro.match(/<\/b>/g) || []).length);
+assert.equal((raro.match(/<a /g) || []).length, (raro.match(/<\/a>/g) || []).length);
+
 // --- informe ---
 const texto = informe();
 assert.match(texto, /Vigilante operativo/);

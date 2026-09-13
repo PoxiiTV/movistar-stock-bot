@@ -3,6 +3,7 @@
 
 # Estado en ejecución
 state.json
+state.json.tmp
 
 # Salida de deploy
 deploy-hosting/

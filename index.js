@@ -1,7 +1,7 @@
 // Vigila el stock de uno o varios dispositivos en movistar.es y avisa por Telegram.
 // Sin dependencias: fetch es nativo de Node >= 18.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { hostname } from 'node:os';
 
@@ -14,6 +14,10 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 const log = (...args) => console.log(new Date().toLocaleString('es-ES'), '·', ...args);
+
+// Telegram rechaza el mensaje ENTERO si el HTML está mal formado, así que cualquier
+// texto que venga de la configuración se escapa antes de meterlo en el mensaje.
+const escapar = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 const hora = (d) => d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 
@@ -54,7 +58,11 @@ function leerEstado() {
 }
 
 function guardarEstado(estado) {
-  writeFileSync(ESTADO, JSON.stringify(estado, null, 2));
+  // Se escribe aparte y se renombra: un corte de luz a media escritura dejaria
+  // un state.json truncado, y al no poder leerlo el bot repetiria avisos ya dados.
+  const temporal = new URL('./state.json.tmp', import.meta.url);
+  writeFileSync(temporal, JSON.stringify(estado, null, 2));
+  renameSync(temporal, ESTADO);
 }
 
 // El HTML del producto lleva incrustado un JSON con "stock":N,"alias":"sku_modelo_color_capacidad_modalidad".
@@ -91,18 +99,18 @@ export function anotar(resumen) {
 
 export function informe() {
   const estado = leerEstado();
-  const lineas = ['🟢 <b>Vigilante operativo</b>', '', `🏷 Modalidad: ${MODALIDAD}`, ''];
+  const lineas = ['🟢 <b>Vigilante operativo</b>', '', `🏷 Modalidad: ${escapar(MODALIDAD)}`, ''];
 
   if (info.ultimaComprobacion) {
     lineas.push('📦 <b>Última lectura</b>');
     for (const objetivo of OBJETIVOS) {
       const lectura = info.lecturas[objetivo.clave];
       if (!lectura) {
-        lineas.push(`   ⚠️ ${objetivo.nombre} — sin datos`);
+        lineas.push(`   ⚠️ ${escapar(objetivo.nombre)} — sin datos`);
       } else if (lectura.unidades > 0) {
-        lineas.push(`   ✅ <b>${objetivo.nombre} — ${lectura.unidades} uds.</b>`);
+        lineas.push(`   ✅ <b>${escapar(objetivo.nombre)} — ${lectura.unidades} uds.</b>`);
       } else {
-        lineas.push(`   ❌ ${objetivo.nombre} — agotado`);
+        lineas.push(`   ❌ ${escapar(objetivo.nombre)} — agotado`);
       }
     }
     lineas.push(
@@ -131,13 +139,13 @@ export function informe() {
   if (info.historial.length > 0) {
     lineas.push('', `🧾 <b>Últimos ${info.historial.length} intentos</b>`);
     for (const intento of [...info.historial].reverse()) {
-      lineas.push(`   ${hora(intento.cuando)} — ${intento.resumen}`);
+      lineas.push(`   ${hora(intento.cuando)} — ${escapar(intento.resumen)}`);
     }
   }
 
-  if (info.ultimoError) lineas.push('', `⚠️ Último error: ${info.ultimoError}`);
+  if (info.ultimoError) lineas.push('', `⚠️ Último error: ${escapar(info.ultimoError)}`);
   for (const objetivo of OBJETIVOS) {
-    lineas.push('', `👉 <a href="${objetivo.url}">${objetivo.nombre}</a>`);
+    lineas.push('', `👉 <a href="${escapar(objetivo.url)}">${escapar(objetivo.nombre)}</a>`);
   }
   return lineas.join('\n');
 }
@@ -158,7 +166,11 @@ async function telegram(texto) {
 }
 
 async function descargar(url) {
-  const res = await fetch(url, { headers: { 'user-agent': UA, 'accept-language': 'es-ES,es;q=0.9' } });
+  // Sin limite de tiempo, una conexion colgada dejaria el vigilante congelado sin que se note.
+  const res = await fetch(url, {
+    headers: { 'user-agent': UA, 'accept-language': 'es-ES,es;q=0.9' },
+    signal: AbortSignal.timeout(30_000),
+  });
   if (!res.ok) throw new Error(`HTTP ${res.status} al pedir ${url}`);
   return res.text();
 }
@@ -183,9 +195,10 @@ async function comprobar() {
       delete info.lecturas[objetivo.clave];
       if (!previo.avisadoSinCoincidencias) {
         await telegram(
-          `⚠️ <b>El vigilante no encuentra un producto</b>\n${objetivo.nombre}\nNo hay variantes que coincidan con: <code>${objetivo.terminos.join(', ')}</code>\n${objetivo.url}`
+          `⚠️ <b>El vigilante no encuentra un producto</b>\n${escapar(objetivo.nombre)}\nNo hay variantes que coincidan con: <code>${escapar(objetivo.terminos.join(', '))}</code>\n${escapar(objetivo.url)}`
         );
         estado.objetivos[objetivo.clave] = { ...previo, avisadoSinCoincidencias: true };
+        guardarEstado(estado);
       }
       continue;
     }
@@ -199,7 +212,7 @@ async function comprobar() {
 
     if (hayStock && !previo.hayStock) {
       await telegram(
-        `🚨 <b>¡YA HAY STOCK!</b>\n${objetivo.nombre}\n${MODALIDAD}\n${unidades} unidades disponibles\n\n👉 <a href="${objetivo.url}">Enlace directo para comprarlo</a>`
+        `🚨 <b>¡YA HAY STOCK!</b>\n${escapar(objetivo.nombre)}\n${escapar(MODALIDAD)}\n${unidades} unidades disponibles\n\n👉 <a href="${escapar(objetivo.url)}">Enlace directo para comprarlo</a>`
       );
       log(`📨 Aviso enviado: ${objetivo.nombre}`);
     } else if (!hayStock && previo.hayStock) {
@@ -207,6 +220,8 @@ async function comprobar() {
     }
 
     estado.objetivos[objetivo.clave] = { hayStock, unidades, avisadoSinCoincidencias: false };
+    // Se guarda objetivo a objetivo: si el siguiente falla, lo ya avisado no se repite.
+    guardarEstado(estado);
   }
 
   estado.ultimaComprobacion = new Date().toISOString();
@@ -216,9 +231,21 @@ async function comprobar() {
   anotar(conStock.length === 0 ? 'todo agotado' : conStock.map((o) => `${o.nombre}: ${info.lecturas[o.clave].unidades}`).join(', '));
 }
 
+// Candado: la ronda automática y una consulta tuya por Telegram pueden coincidir.
+// Sin esto, dos comprobaciones a la vez leerían el mismo estado y podrían avisarte dos veces.
+let enCurso = null;
+
+function ciclo(opciones) {
+  if (enCurso) return enCurso;
+  enCurso = ejecutarCiclo(opciones).finally(() => {
+    enCurso = null;
+  });
+  return enCurso;
+}
+
 // programada = false cuando la comprobación la pides tú por Telegram;
 // esas no mueven la hora de la siguiente ronda automática.
-async function ciclo({ programada = true } = {}) {
+async function ejecutarCiclo({ programada = true } = {}) {
   info.comprobaciones += 1;
   info.ultimaComprobacion = new Date();
   if (programada) info.proxima = new Date(Date.now() + MINUTOS * 60_000);
@@ -276,6 +303,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   if (OBJETIVOS.length === 0) {
     console.error('No hay ningún objetivo definido en TARGETS (archivo .env)');
+    process.exit(1);
+  }
+  // Un CHECK_MINUTES mal escrito daría NaN, y setInterval con NaN dispara sin parar:
+  // machacaría la web de Movistar hasta que te bloqueen la IP.
+  if (!Number.isFinite(MINUTOS) || MINUTOS < 1) {
+    console.error(`CHECK_MINUTES debe ser un número de minutos mayor o igual a 1 (recibido: "${process.env.CHECK_MINUTES}")`);
     process.exit(1);
   }
   log(`Vigilando cada ${MINUTOS} min: ${OBJETIVOS.map((o) => o.nombre).join(' | ')}`);
