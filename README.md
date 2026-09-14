@@ -1,10 +1,10 @@
 <div align="center">
 
-# 📱 IP18Bot
+# 📡 movistar-stock-bot
 
 ### Vigilante de stock de Movistar con avisos por Telegram
 
-Comprueba cada pocos minutos si un móvil agotado vuelve a estar disponible y te avisa al instante.
+Comprueba cada pocos minutos si un producto agotado vuelve a estar disponible y te avisa al instante.
 Sin dependencias, sin navegador, sin scraping visual.
 
 `Node.js` · `systemd` · `Telegram Bot API` · `0 dependencias`
@@ -13,26 +13,13 @@ Sin dependencias, sin navegador, sin scraping visual.
 
 ---
 
-## ✅ Misión cumplida
-
-**Funcionó.** El 14 de septiembre de 2026 a las 13:23:03 el bot detectó 4 unidades del **iPhone 18 Pro Max 256 GB Azul Glacial** en Movistar Swap, me avisó al móvil, y conseguí el mío.
-
-```
-14/9/2026, 13:23:03 · ✅ HAY STOCK (4 uds.)
-                      6733_iphone-18-pro-max-fusion_azul_256GB
-```
-
-Llevaba unas 26 horas vigilando y saltó una sola vez. Esa vez bastó. El bot ya está desinstalado: su trabajo está hecho.
-
-El código se queda aquí por si a alguien le sirve para vigilar otra cosa.
-
----
-
 ## 🎯 Qué hace
 
-El **iPhone 18 Pro Max** en color Burdeos y Azul Glacial está permanentemente agotado en modalidad **Movistar Swap**. Las reposiciones de Apple llegan escalonadas, sin fecha, y se agotan en minutos.
+Vigila **cualquier producto de movistar.es** y te avisa por Telegram en cuanto vuelve a haber stock, con el enlace directo de compra.
 
-Este bot vigila la web **cada 3 minutos, 24/7**, y en cuanto entra una unidad te manda un mensaje a Telegram con el enlace directo de compra.
+Sirve para cualquier cosa que aparezca en el catálogo de móviles y dispositivos: cualquier **modelo** (iPhone, Samsung, Xiaomi, Pixel…), cualquier **color**, cualquier **capacidad**, y en cualquier **modalidad** — Movistar Swap, renting o compra directa. Puedes vigilar varias variantes a la vez y cada una te avisa por su cuenta.
+
+Nació para un caso concreto: el iPhone 18 Pro Max en Burdeos y Azul Glacial estaba permanentemente agotado en Movistar Swap, las reposiciones de Apple llegan escalonadas, sin fecha, y se agotan en minutos. Pero no hay nada en el código atado a ese modelo: lo que vigilas se configura, y se cambia desde el propio chat de Telegram.
 
 ```
 🚨 ¡YA HAY STOCK!
@@ -246,6 +233,23 @@ Sin frameworks: `assert` de Node y listo. Cubre el parseo del stock, la lectura 
 
 ---
 
+## 🙌 Una nota personal
+
+Este bot lo escribí para mí, y funcionó.
+
+El 14 de septiembre de 2026 a las 13:23:03 detectó 4 unidades del **iPhone 18 Pro Max 256 GB Azul Glacial** en Movistar Swap, me avisó al móvil, y conseguí el mío.
+
+```
+14/9/2026, 13:23:03 · ✅ HAY STOCK (4 uds.)
+                      6733_iphone-18-pro-max-fusion_azul_256GB
+```
+
+Llevaba unas 26 horas vigilando y saltó **una sola vez**. Esa vez bastó. Ya está desinstalado del servidor: su trabajo está hecho.
+
+Lo publico por si a alguien le ahorra las horas de refrescar una página que no se actualiza sola.
+
+---
+
 ## ⚠️ Aviso
 
 Hace una petición cada pocos minutos a una página pública, con margen aleatorio. No evade protecciones, no automatiza compras y no inicia sesión en ninguna cuenta. Úsalo con cabeza.
@@ -258,19 +262,13 @@ Hace una petición cada pocos minutos a una página pública, con margen aleator
 
 </div>
 
-## ✅ Mission accomplished
-
-**It worked.** On 14 September 2026 at 13:23:03 the bot spotted 4 units of the **iPhone 18 Pro Max 256 GB Glacial Blue** on Movistar Swap, pinged my phone, and I got mine.
-
-It had been watching for about 26 hours and fired exactly once. Once was enough. The bot is now uninstalled — its job is done.
-
-The code stays here in case it is useful to someone watching something else.
-
 ## 🎯 What it does
 
-The **iPhone 18 Pro Max** in Burgundy and Glacial Blue is permanently sold out on **Movistar Swap**. Apple restocks in staggered batches, with no announced date, and they sell out within minutes.
+Watches **any product on movistar.es** and pings you on Telegram the moment it is back in stock, with a direct buy link.
 
-This bot checks the site **every 3 minutes, 24/7**, and pings you on Telegram the moment a unit appears, with a direct buy link.
+It works for anything in the phones and devices catalogue: any **model** (iPhone, Samsung, Xiaomi, Pixel…), any **colour**, any **capacity**, on any **plan** — Movistar Swap, renting or outright purchase. Watch several variants at once; each one alerts independently.
+
+It was born for one specific case (an iPhone 18 Pro Max permanently sold out on Movistar Swap), but nothing in the code is tied to that model: what you watch is configuration, and you change it from the Telegram chat itself.
 
 ## 🔍 How it works
 
@@ -313,6 +311,16 @@ Settings live in `config.json`, seeded from `.env` on first run; after that `.en
 ## 🎛️ Watching something else
 
 Edit `TARGETS`: `Name | alias,terms | buy url`, separated by `;`. Every term must appear in the variant's internal alias — model (`iphone-18-pro-max-fusion` for Swap, `iphone-18-pro-max` for outright purchase), colour and capacity.
+
+## 🙌 A personal note
+
+I wrote this bot for myself, and it worked.
+
+On 14 September 2026 at 13:23:03 it spotted 4 units of the **iPhone 18 Pro Max 256 GB Glacial Blue** on Movistar Swap, pinged my phone, and I got mine.
+
+It had been watching for about 26 hours and fired **exactly once**. Once was enough. It is now uninstalled from the server — its job is done.
+
+I am publishing it in case it saves someone else the hours of refreshing a page that never updates on its own.
 
 ## ⚠️ Disclaimer
 
