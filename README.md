@@ -13,6 +13,21 @@ Sin dependencias, sin navegador, sin scraping visual.
 
 ---
 
+## ✅ Misión cumplida
+
+**Funcionó.** El 14 de septiembre de 2026 a las 13:23:03 el bot detectó 4 unidades del **iPhone 18 Pro Max 256 GB Azul Glacial** en Movistar Swap, me avisó al móvil, y conseguí el mío.
+
+```
+14/9/2026, 13:23:03 · ✅ HAY STOCK (4 uds.)
+                      6733_iphone-18-pro-max-fusion_azul_256GB
+```
+
+Llevaba unas 26 horas vigilando y saltó una sola vez. Esa vez bastó. El bot ya está desinstalado: su trabajo está hecho.
+
+El código se queda aquí por si a alguien le sirve para vigilar otra cosa.
+
+---
+
 ## 🎯 Qué hace
 
 El **iPhone 18 Pro Max** en color Burdeos y Azul Glacial está permanentemente agotado en modalidad **Movistar Swap**. Las reposiciones de Apple llegan escalonadas, sin fecha, y se agotan en minutos.
@@ -242,6 +257,14 @@ Hace una petición cada pocos minutos a una página pública, con margen aleator
 # 🇬🇧 English
 
 </div>
+
+## ✅ Mission accomplished
+
+**It worked.** On 14 September 2026 at 13:23:03 the bot spotted 4 units of the **iPhone 18 Pro Max 256 GB Glacial Blue** on Movistar Swap, pinged my phone, and I got mine.
+
+It had been watching for about 26 hours and fired exactly once. Once was enough. The bot is now uninstalled — its job is done.
+
+The code stays here in case it is useful to someone watching something else.
 
 ## 🎯 What it does
 
